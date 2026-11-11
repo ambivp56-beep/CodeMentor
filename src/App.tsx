@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import LegalPages from "./pages/LegalPages";
 import {
   ArrowRight,
   Code2,
@@ -366,7 +367,14 @@ function App() {
 
     return <AdminDashboard />;
   }
+  // Terms and Privacy pages.
+if (location.pathname === "/terms") {
+  return <LegalPages type="terms" />;
+}
 
+if (location.pathname === "/privacy") {
+  return <LegalPages type="privacy" />;
+}
   // Student dashboard route.
   if (location.pathname.startsWith("/dashboard")) {
     if (!sessionChecked) {
@@ -793,8 +801,8 @@ function App() {
 
           <p className="terms">
             By continuing, you agree to our{" "}
-            <a href="#terms">Terms</a> and{" "}
-            <a href="#privacy">Privacy Policy</a>.
+            <a href="/terms">Terms</a> and{" "}
+<a href="/privacy">Privacy Policy</a>.
           </p>
         </div>
       </section>

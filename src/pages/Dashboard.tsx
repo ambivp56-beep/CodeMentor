@@ -1841,12 +1841,18 @@ if (!response.ok) {
           </div>
         </section>
         <footer className="cm-dashboard-footer">
-          <span>© 2026 CodeMentor</span>
-          <span>Learn deeply. Build confidently.</span>
-          <span>
-            <span className="cm-live-dot" /> YOUR JOURNEY, YOUR PACE
-          </span>
-        </footer>
+  <span>© 2026 CodeMentor</span>
+  <span>Learn deeply. Build confidently.</span>
+
+  <span className="cm-legal-links">
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy Policy</a>
+  </span>
+
+  <span>
+    <span className="cm-live-dot" /> YOUR JOURNEY, YOUR PACE
+  </span>
+</footer>
       </div>
       {selectedMentor && (
   <div
