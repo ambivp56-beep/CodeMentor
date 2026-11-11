@@ -1,5 +1,6 @@
+
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom";
 import { apiUrl } from "../lib/api";
 import {
   LogOut,
@@ -11,8 +12,9 @@ import {
   BookOpenCheck,
   BarChart3,
 } from "lucide-react";
-import { supabase } from "../lib/supabase";
+
 import "./Admin.css";
+
 const API = apiUrl("");
 
 type Student = {
@@ -79,47 +81,49 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const [certificateRequests, setCertificateRequests] = useState<CertificateRequest[]>([]);
+  const [certificateRequests, setCertificateRequests] = useState<
+    CertificateRequest[]
+  >([]);
+
   const [requestsLoading, setRequestsLoading] = useState(true);
   const [requestsError, setRequestsError] = useState("");
-  const [requestFilter, setRequestFilter] = useState<"pending" | "all" | "sent">("pending");
-  const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
+
+  const [requestFilter, setRequestFilter] = useState<
+    "pending" | "all" | "sent"
+  >("pending");
+
+  const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(
+    null
+  );
+
+  // ==========================================
+  // LOAD ADMIN OVERVIEW
+  // ==========================================
 
   async function loadOverview() {
     setLoading(true);
     setError("");
 
     try {
-      const { data, error: sessionError } =
-        await supabase.auth.getSession();
-
-      if (sessionError || !data.session) {
-        navigate("/admin", { replace: true });
-        return;
-      }
-
       const response = await fetch(`${API}/api/admin/overview`, {
-        headers: {
-          Authorization: `Bearer ${data.session.access_token}`,
-        },
+        credentials: "include",
       });
 
-    const result = await response.json().catch(() => null);
+      const result = await response.json().catch(() => null);
 
-if (!result) {
-  console.error("Admin overview returned an invalid response:", {
-    url: response.url,
-    status: response.status,
-    contentType: response.headers.get("content-type"),
-  });
+      if (!result) {
+        console.error("Admin overview returned an invalid response:", {
+          url: response.url,
+          status: response.status,
+          contentType: response.headers.get("content-type"),
+        });
 
-  throw new Error(
-    "Admin API did not return JSON. Check the Network tab."
-  );
-}
+        throw new Error(
+          "Admin API did not return JSON. Check the Network tab."
+        );
+      }
 
       if (response.status === 401 || response.status === 403) {
-        await supabase.auth.signOut();
         navigate("/admin", { replace: true });
         return;
       }
@@ -149,6 +153,10 @@ if (!result) {
     }
   }
 
+  // ==========================================
+  // LOAD CERTIFICATE REQUESTS
+  // ==========================================
+
   async function loadCertificateRequests(
     status: "all" | "pending" | "sent" = requestFilter
   ) {
@@ -156,27 +164,16 @@ if (!result) {
     setRequestsError("");
 
     try {
-      const { data, error: sessionError } =
-        await supabase.auth.getSession();
-
-      if (sessionError || !data.session) {
-        navigate("/admin", { replace: true });
-        return;
-      }
-
       const response = await fetch(
         `${API}/api/admin/certificate-requests?status=${status}`,
         {
-          headers: {
-            Authorization: `Bearer ${data.session.access_token}`,
-          },
+          credentials: "include",
         }
       );
 
       const result = await response.json().catch(() => null);
 
       if (response.status === 401 || response.status === 403) {
-        await supabase.auth.signOut();
         navigate("/admin", { replace: true });
         return;
       }
@@ -199,7 +196,13 @@ if (!result) {
     }
   }
 
-  async function markCertificateRequestSent(request: CertificateRequest) {
+  // ==========================================
+  // MARK CERTIFICATE REQUEST AS SENT
+  // ==========================================
+
+  async function markCertificateRequestSent(
+    request: CertificateRequest
+  ) {
     if (!request.eligible) {
       setRequestsError(
         `Cannot mark this request as sent: course progress is ${request.completedCount}/${request.requiredCount}.`
@@ -211,21 +214,15 @@ if (!result) {
     setRequestsError("");
 
     try {
-      const { data, error: sessionError } =
-        await supabase.auth.getSession();
-
-      if (sessionError || !data.session) {
-        navigate("/admin", { replace: true });
-        return;
-      }
-
       const response = await fetch(
-        `${API}/api/admin/certificate-requests/${encodeURIComponent(request.id)}`,
+        `${API}/api/admin/certificate-requests/${encodeURIComponent(
+          request.id
+        )}`,
         {
           method: "PATCH",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${data.session.access_token}`,
           },
           body: JSON.stringify({ status: "sent" }),
         }
@@ -233,9 +230,15 @@ if (!result) {
 
       const result = await response.json().catch(() => null);
 
+      if (response.status === 401 || response.status === 403) {
+        navigate("/admin", { replace: true });
+        return;
+      }
+
       if (!response.ok || !result?.success) {
         throw new Error(
-          result?.message || "Could not update this certificate request."
+          result?.message ||
+            "Could not update this certificate request."
         );
       }
 
@@ -250,14 +253,31 @@ if (!result) {
       setUpdatingRequestId(null);
     }
   }
-    useEffect(() => {
+
+  // ==========================================
+  // INITIAL DASHBOARD LOAD
+  // ==========================================
+
+  useEffect(() => {
     void loadOverview();
     void loadCertificateRequests("pending");
   }, []);
 
+  // ==========================================
+  // ADMIN LOGOUT
+  // ==========================================
+
   async function handleLogout() {
-    await supabase.auth.signOut();
-    navigate("/admin", { replace: true });
+    try {
+      await fetch(`${API}/api/admin/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch (err) {
+      console.error("Admin logout request failed:", err);
+    } finally {
+      navigate("/admin", { replace: true });
+    }
   }
 
   const maxCourseCompletions = Math.max(
@@ -274,6 +294,7 @@ if (!result) {
           <span className="admin-brand-icon">
             <ShieldCheck size={22} />
           </span>
+
           <span>
             Code<span>Mentor</span>
           </span>
@@ -281,6 +302,7 @@ if (!result) {
 
         <div className="admin-header-actions">
           <span className="admin-badge">ADMIN CONSOLE</span>
+
           <button className="admin-logout" onClick={handleLogout}>
             <LogOut size={16} /> Sign out
           </button>
@@ -289,7 +311,9 @@ if (!result) {
 
       <section className="admin-dashboard-content">
         <p className="admin-eyebrow">SECURE ADMINISTRATION</p>
+
         <h1>Platform overview</h1>
+
         <p className="admin-description">
           Monitor student accounts, course activity, and completed lessons.
         </p>
@@ -298,6 +322,7 @@ if (!result) {
           <article className="admin-stat-card">
             <Users size={21} />
             <span>Total registered accounts</span>
+
             <strong>
               {loading
                 ? "…"
@@ -308,14 +333,18 @@ if (!result) {
           <article className="admin-stat-card">
             <UserCheck size={21} />
             <span>Verified accounts on this page</span>
+
             <strong>
-              {loading ? "…" : overview?.confirmedAccounts ?? "—"}
+              {loading
+                ? "…"
+                : overview?.confirmedAccounts ?? "—"}
             </strong>
           </article>
 
           <article className="admin-stat-card">
             <BookOpenCheck size={21} />
             <span>Total completed lessons</span>
+
             <strong>
               {loading
                 ? "…"
@@ -326,6 +355,7 @@ if (!result) {
           <article className="admin-stat-card">
             <Clock3 size={21} />
             <span>Accounts loaded</span>
+
             <strong>
               {loading
                 ? "…"
@@ -339,6 +369,8 @@ if (!result) {
             {error}
           </p>
         )}
+
+        {/* COURSE COMPLETION ACTIVITY */}
 
         <section
           className="admin-student-panel"
@@ -357,6 +389,7 @@ if (!result) {
                 />
                 Course completion activity
               </h2>
+
               <p>
                 Number of completed lesson records in each course.
               </p>
@@ -372,7 +405,9 @@ if (!result) {
           </div>
 
           {loading ? (
-            <p className="admin-empty">Loading course progress…</p>
+            <p className="admin-empty">
+              Loading course progress…
+            </p>
           ) : overview?.courseProgress.length ? (
             <div style={{ display: "grid", gap: 22, padding: "20px 0" }}>
               {overview.courseProgress.map((course) => {
@@ -389,7 +424,10 @@ if (!result) {
                         marginBottom: 9,
                       }}
                     >
-                      <strong>{formatCourseName(course.courseId)}</strong>
+                      <strong>
+                        {formatCourseName(course.courseId)}
+                      </strong>
+
                       <span>
                         {course.completedLessons} completions
                       </span>
@@ -430,10 +468,13 @@ if (!result) {
           )}
         </section>
 
+        {/* STUDENT LEARNING PROGRESS */}
+
         <div className="admin-student-panel">
           <div className="admin-panel-heading">
             <div>
               <h2>Student learning progress</h2>
+
               <p>
                 Completed lessons recorded for each registered account.
               </p>
@@ -441,7 +482,9 @@ if (!result) {
           </div>
 
           {loading ? (
-            <p className="admin-empty">Loading student progress…</p>
+            <p className="admin-empty">
+              Loading student progress…
+            </p>
           ) : overview?.students.length ? (
             <div className="admin-table-wrap">
               <table className="admin-table">
@@ -459,9 +502,13 @@ if (!result) {
                   {overview.students.map((student) => (
                     <tr key={student.id}>
                       <td>{student.email || "—"}</td>
+
                       <td>
-                        <strong>{student.completedLessons}</strong>
+                        <strong>
+                          {student.completedLessons}
+                        </strong>
                       </td>
+
                       <td>
                         <span
                           className={
@@ -475,6 +522,7 @@ if (!result) {
                             : "Unverified"}
                         </span>
                       </td>
+
                       <td>
                         {student.createdAt
                           ? new Date(
@@ -482,6 +530,7 @@ if (!result) {
                             ).toLocaleDateString()
                           : "—"}
                       </td>
+
                       <td>
                         {student.lastSignInAt
                           ? new Date(
@@ -511,22 +560,31 @@ if (!result) {
               </p>
             )}
         </div>
-                <section
+
+        {/* CERTIFICATE REQUESTS */}
+
+        <section
           className="admin-student-panel"
           aria-labelledby="certificate-requests-heading"
           style={{ marginTop: 24 }}
         >
           <div className="admin-panel-heading">
             <div>
-              <h2 id="certificate-requests-heading">Certificate requests</h2>
+              <h2 id="certificate-requests-heading">
+                Certificate requests
+              </h2>
+
               <p>
                 Check each student’s saved course progress before manually
                 sending a certificate.
               </p>
             </div>
+
             <button
               className="admin-refresh"
-              onClick={() => void loadCertificateRequests(requestFilter)}
+              onClick={() =>
+                void loadCertificateRequests(requestFilter)
+              }
               disabled={requestsLoading}
             >
               <RefreshCw size={15} /> Refresh requests
@@ -542,11 +600,13 @@ if (!result) {
             }}
             aria-label="Filter certificate requests"
           >
-            {([
-              { value: "pending", label: "Pending" },
-              { value: "all", label: "All requests" },
-              { value: "sent", label: "Sent" },
-            ] as const).map((option) => (
+            {(
+              [
+                { value: "pending", label: "Pending" },
+                { value: "all", label: "All requests" },
+                { value: "sent", label: "Sent" },
+              ] as const
+            ).map((option) => (
               <button
                 key={option.value}
                 type="button"
@@ -574,7 +634,9 @@ if (!result) {
           )}
 
           {requestsLoading ? (
-            <p className="admin-empty">Loading certificate requests…</p>
+            <p className="admin-empty">
+              Loading certificate requests…
+            </p>
           ) : certificateRequests.length === 0 ? (
             <p className="admin-empty">
               No {requestFilter === "all" ? "" : `${requestFilter} `}
@@ -593,12 +655,14 @@ if (!result) {
                     <th>Actions</th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {certificateRequests.map((request) => (
                     <tr key={request.id}>
                       <td>
                         <strong>{request.student_name}</strong>
                         <br />
+
                         <a
                           href={`mailto:${request.email}?subject=${encodeURIComponent(
                             `CodeMentor certificate - ${request.course_title}`
@@ -611,15 +675,21 @@ if (!result) {
                           {request.email}
                         </a>
                       </td>
+
                       <td>
                         <strong>{request.course_title}</strong>
                         <br />
+
                         <span
-                          style={{ color: "#96a3c1", fontSize: 11 }}
+                          style={{
+                            color: "#96a3c1",
+                            fontSize: 11,
+                          }}
                         >
                           {request.course_id}
                         </span>
                       </td>
+
                       <td>
                         <span
                           className={
@@ -632,12 +702,15 @@ if (!result) {
                             ? "Eligible"
                             : "Not complete"}
                         </span>
+
                         <div style={{ marginTop: 7 }}>
                           <strong>
-                            {request.completedCount}/{request.requiredCount}
+                            {request.completedCount}/
+                            {request.requiredCount}
                           </strong>{" "}
                           lessons
                         </div>
+
                         {!request.eligible && (
                           <div
                             style={{
@@ -650,6 +723,7 @@ if (!result) {
                           </div>
                         )}
                       </td>
+
                       <td>
                         {request.requested_at
                           ? new Date(
@@ -657,6 +731,7 @@ if (!result) {
                             ).toLocaleString()
                           : "—"}
                       </td>
+
                       <td>
                         <span
                           className={
@@ -669,6 +744,7 @@ if (!result) {
                             ? "Sent"
                             : "Pending"}
                         </span>
+
                         {request.sent_at && (
                           <div
                             style={{
@@ -683,6 +759,7 @@ if (!result) {
                           </div>
                         )}
                       </td>
+
                       <td>
                         <div style={{ display: "grid", gap: 8 }}>
                           {request.status === "pending" ? (
@@ -696,6 +773,7 @@ if (!result) {
                               >
                                 Email student
                               </a>
+
                               <button
                                 type="button"
                                 className="admin-refresh"
@@ -737,11 +815,12 @@ if (!result) {
               </table>
             </div>
           )}
+
           <p className="admin-table-note">
-            Completion is checked against saved, completed lesson records. Open
-            the student’s email link to send the certificate manually, then use
-            “Mark as sent” to update the request. That action is disabled until
-            all required lessons are complete.
+            Completion is checked against saved, completed lesson records.
+            Open the student’s email link to send the certificate manually,
+            then use “Mark as sent” to update the request. That action is
+            disabled until all required lessons are complete.
           </p>
         </section>
       </section>

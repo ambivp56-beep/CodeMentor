@@ -9,7 +9,6 @@ import {
   Mail,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "../lib/supabase";
 import "./Admin.css";
 import { apiUrl } from "../lib/api";
 
@@ -43,72 +42,23 @@ export default function AdminLogin() {
     setError("");
 
     try {
-      const normalizedEmail = email.trim().toLowerCase();
-
-      // Authenticate using the fixed administrator credentials.
-      const loginResponse = await fetch(`${API_BASE}/api/admin/login`, {
+      const response = await fetch(`${API_BASE}/api/admin/login`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          email: normalizedEmail,
+          email: email.trim().toLowerCase(),
           password,
         }),
       });
 
-      const loginResult = await readJson(loginResponse);
+      const result = await readJson(response);
 
-      if (!loginResponse.ok || !loginResult.success) {
+      if (!response.ok || !result.success) {
         throw new Error(
-          loginResult.message || "Invalid administrator email or password."
-        );
-      }
-
-      const session = loginResult.session;
-
-      if (!session?.access_token || !session?.refresh_token) {
-        throw new Error("The server did not return a valid login session.");
-      }
-
-      // Save the Supabase session for the protected admin dashboard.
-      const { error: sessionError } = await supabase.auth.setSession({
-        access_token: session.access_token,
-        refresh_token: session.refresh_token,
-      });
-
-      if (sessionError) {
-        throw sessionError;
-      }
-
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-
-      if (!accessToken) {
-        await supabase.auth.signOut();
-        throw new Error("Could not establish the administrator session.");
-      }
-
-      // Confirm administrator permissions with the backend.
-      const adminResponse = await fetch(`${API_BASE}/api/admin/me`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      });
-
-      const adminResult = await readJson(adminResponse);
-
-      if (
-        !adminResponse.ok ||
-        !adminResult.success ||
-        !adminResult.isAdmin
-      ) {
-        await supabase.auth.signOut();
-
-        throw new Error(
-          adminResult.message ||
-            "This account is not authorized for administrator access."
+          result.message || "Invalid administrator email or password."
         );
       }
 
@@ -195,9 +145,7 @@ export default function AdminLogin() {
               type="button"
               className="admin-password-toggle"
               onClick={() => setShowPassword((value) => !value)}
-              aria-label={
-                showPassword ? "Hide password" : "Show password"
-              }
+              aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? (
                 <EyeOff size={17} />
@@ -218,8 +166,7 @@ export default function AdminLogin() {
             type="submit"
             disabled={loading}
           >
-            {loading ? "Signing in..." : "Sign in to Admin Panel"}
-
+            {loading ? "Signing in..." : "Sign into Admin Panel"}
             <ArrowRight size={18} />
           </button>
         </form>
