@@ -3427,6 +3427,101 @@ if (courseId === "web" && mode === "run") {
     }
   });
 
+  // ------------------------------------------------------
+  // ADMIN: GET DASHBOARD OVERVIEW
+  // ------------------------------------------------------
+
+  app.get("/api/admin/overview", requireAdmin, async (req, res) => {
+    try {
+      // Fetch the first 100 registered accounts.
+      const { data: usersData, error: usersError } =
+        await adminClient.auth.admin.listUsers({
+          page: 1,
+          perPage: 100,
+        });
+
+      if (usersError) {
+        throw usersError;
+      }
+
+      const users = usersData?.users || [];
+      const userIds = users.map((user) => user.id);
+
+      let progress = [];
+
+      if (userIds.length > 0) {
+        const { data, error: progressError } = await adminClient
+          .from("lesson_progress")
+          .select("user_id, course_id, lesson_id")
+          .in("user_id", userIds)
+          .eq("completed", true);
+
+        if (progressError) {
+          throw progressError;
+        }
+
+        progress = data || [];
+      }
+
+      // Count completed lessons for each student.
+      const studentLessonCounts = new Map();
+
+      for (const item of progress) {
+        studentLessonCounts.set(
+          item.user_id,
+          (studentLessonCounts.get(item.user_id) || 0) + 1
+        );
+      }
+
+      // Prepare student records.
+      const students = users.map((user) => ({
+        id: user.id,
+        email: user.email || "",
+        createdAt: user.created_at,
+        emailConfirmed: Boolean(user.email_confirmed_at),
+        lastSignInAt: user.last_sign_in_at || null,
+        completedLessons: studentLessonCounts.get(user.id) || 0,
+      }));
+
+      // Count completed lesson records by course.
+      const courseCounts = new Map();
+
+      for (const item of progress) {
+        courseCounts.set(
+          item.course_id,
+          (courseCounts.get(item.course_id) || 0) + 1
+        );
+      }
+
+      const courseProgress = Array.from(
+        courseCounts,
+        ([courseId, completedLessons]) => ({
+          courseId,
+          completedLessons,
+        })
+      );
+
+      return res.json({
+        success: true,
+        totalStudents: usersData?.total ?? users.length,
+        studentsOnThisPage: students.length,
+        confirmedAccounts: users.filter(
+          (user) => Boolean(user.email_confirmed_at)
+        ).length,
+        totalCompletedLessons: progress.length,
+        courseProgress,
+        students,
+      });
+    } catch (error) {
+      console.error("Admin overview error:", error);
+
+      return res.status(500).json({
+        success: false,
+        message: "Could not load administrator overview.",
+      });
+    }
+  });
+
 
   // ------------------------------------------------------
   // ADMIN: GET CERTIFICATE REQUESTS
