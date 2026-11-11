@@ -51,6 +51,19 @@ export default function AdminLogin() {
     setConfirmPassword("");
     clearFeedback();
   }
+  async function readJsonResponse(response: Response): Promise<any> {
+  const raw = await response.text();
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `Expected JSON but received ${
+        response.headers.get("content-type") || "unknown content type"
+      } (HTTP ${response.status}) from ${response.url}`,
+    );
+  }
+}
 
   async function postJson(path: string, body: object) {
     const response = await fetch(`${API}${path}`, {
@@ -60,6 +73,7 @@ export default function AdminLogin() {
     });
 
     const result = await response.json();
+    const result = await readJsonResponse(response);
 
     if (!response.ok || !result.success) {
       throw new Error(result.message || "The request could not be completed.");
@@ -118,7 +132,7 @@ export default function AdminLogin() {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
-        const adminResult = await adminResponse.json();
+        const adminResult = await readJsonResponse(adminResponse);
 
         if (
           !adminResponse.ok ||
