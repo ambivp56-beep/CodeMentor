@@ -821,6 +821,100 @@ app.post("/api/auth/resend-signup-code", async (req, res) => {
 });
 
 
+/* ======================================================
+   ADMIN LOGIN - NO OTP
+   ====================================================== */
+
+app.post("/api/admin/login", async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    const configuredEmail = (
+      process.env.ADMIN_EMAIL || ""
+    ).trim().toLowerCase();
+
+    const configuredPassword = process.env.ADMIN_PASSWORD || "";
+
+    if (!configuredEmail || !configuredPassword) {
+      console.error("Admin login credentials are not configured.");
+
+      return res.status(500).json({
+        success: false,
+        message: "Administrator login is not configured.",
+      });
+    }
+
+    if (
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !email.trim() ||
+      !password
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required.",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Check the fixed administrator credentials.
+    if (
+      normalizedEmail !== configuredEmail ||
+      password !== configuredPassword ||
+      !ADMIN_EMAILS.has(normalizedEmail)
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid administrator email or password.",
+      });
+    }
+
+    // Create a Supabase session for the existing admin middleware.
+    const { data, error } = await authClient.auth.signInWithPassword({
+      email: normalizedEmail,
+      password,
+    });
+
+    if (error || !data.session || !data.user) {
+      console.error(
+        "Admin Supabase authentication failed:",
+        error?.message
+      );
+
+      return res.status(401).json({
+        success: false,
+        message: "Invalid administrator email or password.",
+      });
+    }
+
+    if (!data.user.email_confirmed_at) {
+      await authClient.auth.signOut();
+
+      return res.status(403).json({
+        success: false,
+        message: "The administrator email must be confirmed in Supabase.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Administrator login successful.",
+      session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      },
+    });
+  } catch (error) {
+    console.error("Admin login error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Administrator login could not be completed.",
+    });
+  }
+});
+
 
 /* ======================================================
    STUDENT LOGIN
