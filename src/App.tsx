@@ -532,31 +532,7 @@ function App() {
             </p>
           </div>
 
-          {!isRecovery && (
-            <>
-              <button
-                type="button"
-                className="github-button"
-                onClick={() => {
-                  setError("");
-                  setMessage(
-                    "GitHub sign-in isn't connected yet. Please use email and password.",
-                  );
-                }}
-                disabled={loading}
-              >
-                <Code2 size={18} />
-                Continue with GitHub
-              </button>
-
-              <div className="form-divider">
-                <span />
-                <p>OR CONTINUE WITH EMAIL</p>
-                <span />
-              </div>
-            </>
-          )}
-
+         
           {codementorId || recoveredCodeMentorId ? (
             <div className="auth-success-panel">
               <h2>
