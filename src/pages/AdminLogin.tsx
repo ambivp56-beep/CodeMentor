@@ -51,19 +51,20 @@ export default function AdminLogin() {
     setConfirmPassword("");
     clearFeedback();
   }
-  async function readJsonResponse(response: Response): Promise<any> {
-  const raw = await response.text();
 
-  try {
-    return JSON.parse(raw);
-  } catch {
-    throw new Error(
-      `Expected JSON but received ${
-        response.headers.get("content-type") || "unknown content type"
-      } (HTTP ${response.status}) from ${response.url}`,
-    );
+  async function readJsonResponse(response: Response): Promise<any> {
+    const raw = await response.text();
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(
+        `Expected JSON but received ${
+          response.headers.get("content-type") || "unknown content type"
+        } (HTTP ${response.status}) from ${response.url}`,
+      );
+    }
   }
-}
 
   async function postJson(path: string, body: object) {
     const response = await fetch(`${API}${path}`, {
@@ -72,11 +73,12 @@ export default function AdminLogin() {
       body: JSON.stringify(body),
     });
 
-    const result = await response.json();
     const result = await readJsonResponse(response);
 
     if (!response.ok || !result.success) {
-      throw new Error(result.message || "The request could not be completed.");
+      throw new Error(
+        result.message || "The request could not be completed.",
+      );
     }
 
     return result;
@@ -125,11 +127,15 @@ export default function AdminLogin() {
 
         if (!accessToken || !data.session?.user.email_confirmed_at) {
           await supabase.auth.signOut();
-          throw new Error("Your verified session could not be confirmed.");
+          throw new Error(
+            "Your verified session could not be confirmed.",
+          );
         }
 
         const adminResponse = await fetch(`${API}/api/admin/me`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
         });
 
         const adminResult = await readJsonResponse(adminResponse);
@@ -140,6 +146,7 @@ export default function AdminLogin() {
           !adminResult.isAdmin
         ) {
           await supabase.auth.signOut();
+
           throw new Error(
             adminResponse.status === 403
               ? "This account is not authorized for administrator access."
@@ -155,28 +162,41 @@ export default function AdminLogin() {
         });
 
         setStep("reset-verify");
-        setMessage("Check your authorized admin email for the recovery code.");
+        setMessage(
+          "Check your authorized admin email for the recovery code.",
+        );
       } else if (step === "reset-verify") {
-        const result = await postJson("/api/admin/password-reset/verify", {
-          email: normalizedEmail,
-          code: code.trim().toUpperCase(),
-        });
+        const result = await postJson(
+          "/api/admin/password-reset/verify",
+          {
+            email: normalizedEmail,
+            code: code.trim().toUpperCase(),
+          },
+        );
 
         if (!result.resetToken) {
-          throw new Error("The server did not return a reset authorization.");
+          throw new Error(
+            "The server did not return a reset authorization.",
+          );
         }
 
         setResetToken(result.resetToken);
         setStep("reset-password");
         setCode("");
-        setMessage("Code verified. You can now choose a new password.");
+        setMessage(
+          "Code verified. You can now choose a new password.",
+        );
       } else if (step === "reset-password") {
         if (newPassword.length < 8) {
-          throw new Error("Your new password must be at least 8 characters.");
+          throw new Error(
+            "Your new password must be at least 8 characters.",
+          );
         }
 
         if (newPassword.length > 128) {
-          throw new Error("Your new password cannot exceed 128 characters.");
+          throw new Error(
+            "Your new password cannot exceed 128 characters.",
+          );
         }
 
         if (newPassword !== confirmPassword) {
@@ -195,11 +215,15 @@ export default function AdminLogin() {
         setResetToken("");
         setCode("");
         setStep("login");
-        setMessage("Password updated successfully. Sign in with your new password.");
+        setMessage(
+          "Password updated successfully. Sign in with your new password.",
+        );
       }
     } catch (err: unknown) {
       setError(
-        err instanceof Error ? err.message : "Something went wrong. Try again.",
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Try again.",
       );
     } finally {
       setLoading(false);
@@ -264,6 +288,7 @@ export default function AdminLogin() {
 
         <form onSubmit={handleSubmit}>
           <label htmlFor="admin-email">Email address</label>
+
           <div className="admin-input-wrap">
             <Mail size={17} />
             <input
@@ -274,14 +299,19 @@ export default function AdminLogin() {
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
-              disabled={loading || step === "verify" ||
-                step === "reset-verify" || step === "reset-password"}
+              disabled={
+                loading ||
+                step === "verify" ||
+                step === "reset-verify" ||
+                step === "reset-password"
+              }
             />
           </div>
 
           {step === "login" && (
             <>
               <label htmlFor="admin-password">Password</label>
+
               <div className="admin-input-wrap">
                 <LockKeyhole size={17} />
                 <input
@@ -294,13 +324,22 @@ export default function AdminLogin() {
                   required
                   disabled={loading}
                 />
+
                 <button
                   type="button"
                   className="admin-password-toggle"
-                  onClick={() => setShowPassword((value) => !value)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  onClick={() =>
+                    setShowPassword((value) => !value)
+                  }
+                  aria-label={
+                    showPassword ? "Hide password" : "Show password"
+                  }
                 >
-                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  {showPassword ? (
+                    <EyeOff size={17} />
+                  ) : (
+                    <Eye size={17} />
+                  )}
                 </button>
               </div>
 
@@ -318,8 +357,11 @@ export default function AdminLogin() {
           {(step === "verify" || step === "reset-verify") && (
             <>
               <label htmlFor="admin-code">
-                {step === "verify" ? "Email verification code" : "Recovery code"}
+                {step === "verify"
+                  ? "Email verification code"
+                  : "Recovery code"}
               </label>
+
               <div className="admin-input-wrap">
                 <LockKeyhole size={17} />
                 <input
@@ -348,7 +390,10 @@ export default function AdminLogin() {
 
           {step === "reset-password" && (
             <>
-              <label htmlFor="admin-new-password">New password</label>
+              <label htmlFor="admin-new-password">
+                New password
+              </label>
+
               <div className="admin-input-wrap">
                 <LockKeyhole size={17} />
                 <input
@@ -357,23 +402,37 @@ export default function AdminLogin() {
                   autoComplete="new-password"
                   placeholder="At least 8 characters"
                   value={newPassword}
-                  onChange={(event) => setNewPassword(event.target.value)}
+                  onChange={(event) =>
+                    setNewPassword(event.target.value)
+                  }
                   minLength={8}
                   maxLength={128}
                   required
                   disabled={loading}
                 />
+
                 <button
                   type="button"
                   className="admin-password-toggle"
-                  onClick={() => setShowNewPassword((value) => !value)}
-                  aria-label={showNewPassword ? "Hide password" : "Show password"}
+                  onClick={() =>
+                    setShowNewPassword((value) => !value)
+                  }
+                  aria-label={
+                    showNewPassword ? "Hide password" : "Show password"
+                  }
                 >
-                  {showNewPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  {showNewPassword ? (
+                    <EyeOff size={17} />
+                  ) : (
+                    <Eye size={17} />
+                  )}
                 </button>
               </div>
 
-              <label htmlFor="admin-confirm-password">Confirm new password</label>
+              <label htmlFor="admin-confirm-password">
+                Confirm new password
+              </label>
+
               <div className="admin-input-wrap">
                 <LockKeyhole size={17} />
                 <input
@@ -382,7 +441,9 @@ export default function AdminLogin() {
                   autoComplete="new-password"
                   placeholder="Enter the new password again"
                   value={confirmPassword}
-                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  onChange={(event) =>
+                    setConfirmPassword(event.target.value)
+                  }
                   minLength={8}
                   maxLength={128}
                   required
@@ -404,7 +465,11 @@ export default function AdminLogin() {
             </p>
           )}
 
-          <button className="admin-submit" type="submit" disabled={loading}>
+          <button
+            className="admin-submit"
+            type="submit"
+            disabled={loading}
+          >
             {loading
               ? "Please wait..."
               : step === "login"
@@ -416,6 +481,7 @@ export default function AdminLogin() {
                     : step === "reset-verify"
                       ? "Verify recovery code"
                       : "Update password"}
+
             <ArrowRight size={18} />
           </button>
         </form>
@@ -425,13 +491,7 @@ export default function AdminLogin() {
             type="button"
             className="admin-back"
             disabled={loading}
-            onClick={() => {
-              if (step === "verify") {
-                changeStep("login");
-              } else {
-                changeStep("login");
-              }
-            }}
+            onClick={() => changeStep("login")}
           >
             Back to sign in
           </button>
