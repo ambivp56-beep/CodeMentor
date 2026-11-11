@@ -15,7 +15,7 @@ import {
 
 import "./Admin.css";
 
-const API = apiUrl("");
+const API = apiUrl("").replace(/\/+$/, "");
 
 type Student = {
   id: string;
