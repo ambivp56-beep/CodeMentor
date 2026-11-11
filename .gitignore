@@ -37,3 +37,5 @@ server-backup.js
 server-before-*.js
 Dashboard-before-*.tsx
 backend/CodeMentor_Certificate_Alignment_Fix/
+.vercel
+.env*

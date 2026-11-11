@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
 require("dotenv").config();
@@ -12,8 +12,10 @@ const {
   createSignupCode,
   verifySignupCode,
   resendSignupCode,
-  createPasswordResetCode,
+  createStudentIdRecoveryCode,
+  verifyStudentIdRecoveryCode,
   verifyPasswordResetCode,
+  createPasswordResetCode,
   consumePasswordResetToken,
 } = require("./otpStore");
 
@@ -136,7 +138,71 @@ async function findAuthUserByEmail(email) {
     page++;
   }
 }
+// ======================================================
+// STUDENT CODEMENTOR ID
+// ======================================================
 
+async function getOrCreateStudentCodeMentorId(userId) {
+  // First, check whether this student already has an ID.
+  const { data: existingProfile, error: lookupError } =
+    await adminClient
+      .from("student_profiles")
+      .select("codementor_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+  if (lookupError) {
+    throw lookupError;
+  }
+
+  if (existingProfile) {
+    return existingProfile.codementor_id;
+  }
+
+  // Generate a unique ID, retrying if a collision occurs.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const codementorId =
+      `CM-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+
+    const { data, error } = await adminClient
+      .from("student_profiles")
+      .insert({
+        user_id: userId,
+        codementor_id: codementorId,
+
+     })
+      .select("codementor_id")
+      .single();
+
+    if (!error && data) {
+      return data.codementor_id;
+    }
+
+    // Handle an ID or user_id uniqueness conflict.
+    if (error?.code === "23505") {
+      const { data: profile, error: retryLookupError } =
+        await adminClient
+          .from("student_profiles")
+          .select("codementor_id")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+      if (retryLookupError) {
+        throw retryLookupError;
+      }
+
+      if (profile) {
+        return profile.codementor_id;
+      }
+
+      continue;
+    }
+
+    throw error || new Error("Could not create CodeMentor ID.");
+  }
+
+  throw new Error("Could not generate a unique CodeMentor ID.");
+}
 // ======================================================
 // ADMIN ACCESS CONTROL
 // ======================================================
@@ -528,84 +594,112 @@ app.get("/api/health/supabase", (req, res) => {
 // SIGNUP
 // ======================================================
 
+
 app.post("/api/auth/signup", async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { name, email, password } = req.body || {};
 
     if (
+      typeof name !== "string" ||
       typeof email !== "string" ||
       typeof password !== "string" ||
+      !name.trim() ||
       !email.trim() ||
       !password
     ) {
       return res.status(400).json({
         success: false,
-        message: "Email and password are required.",
+        message: "Please enter your name, email, and password.",
       });
     }
 
+    const normalizedName = name.trim();
     const normalizedEmail = email.trim().toLowerCase();
 
-    if (password.length < 6) {
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailPattern.test(normalizedEmail)) {
       return res.status(400).json({
         success: false,
-        message: "Password must contain at least 6 characters.",
+        message: "Please enter a valid email address.",
       });
     }
 
-    const { data, error } =
-      await adminClient.auth.admin.createUser({
-        email: normalizedEmail,
-        password,
-        email_confirm: false,
+    if (password.length < 8 || password.length > 128) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be between 8 and 128 characters.",
       });
+    }
+
+    // Create an already-confirmed student account.
+    const { data, error } = await adminClient.auth.admin.createUser({
+      email: normalizedEmail,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        full_name: normalizedName,
+      },
+    });
 
     if (error || !data.user) {
-      console.error("Signup error:", error?.message);
-
       return res.status(400).json({
         success: false,
-        message:
-          "Account could not be created. Check the email or try signing in.",
+        message: error?.message || "Could not create your account.",
       });
     }
 
-    const code = createSignupCode(
-      normalizedEmail,
-      data.user.id
-    );
+    let studentCodeMentorId;
 
     try {
-      await sendVerificationCode(normalizedEmail, code);
-    } catch (emailError) {
-      console.error(
-        "Signup verification email failed:",
-        emailError.message
+      // Generate and save the student's unique CodeMentor ID.
+      studentCodeMentorId = await getOrCreateStudentCodeMentorId(
+        data.user.id
       );
+    } catch (profileError) {
+      // Remove the newly created account if ID creation fails.
+      await adminClient.auth.admin.deleteUser(data.user.id);
+      throw profileError;
+    }
 
-      return res.status(502).json({
-        success: false,
-        message:
-          "The account was created, but the verification email could not be sent. Try resending the code.",
+    // Create the student's login session.
+    const { data: loginData, error: loginError } =
+      await authClient.auth.signInWithPassword({
         email: normalizedEmail,
+        password,
+      });
+
+    if (loginError || !loginData.session) {
+      return res.status(500).json({
+        success: false,
+        message: "Your account was created, but automatic sign-in failed. Please sign in.",
       });
     }
 
-    return res.json({
+    return res.status(201).json({
       success: true,
+      message: "Account created successfully!",
       email: normalizedEmail,
-      requiresVerification: true,
-      message: "Your six-character verification code has been sent.",
+      name: normalizedName,
+      codementorId: studentCodeMentorId,
+      session: {
+        access_token: loginData.session.access_token,
+        refresh_token: loginData.session.refresh_token,
+        token_type: loginData.session.token_type,
+        expires_in: loginData.session.expires_in,
+        expires_at: loginData.session.expires_at,
+      },
     });
   } catch (error) {
-    console.error("Signup error:", error.message);
+    console.error("Student signup error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Signup could not be completed.",
+      message: "Something went wrong while creating your account.",
     });
   }
 });
+
 
 // ======================================================
 // VERIFY SIGNUP EMAIL
@@ -650,12 +744,18 @@ app.post("/api/auth/verify-signup-code", async (req, res) => {
         message: "Email confirmation failed. Please try again.",
       });
     }
+    const codementorId = await getOrCreateStudentCodeMentorId(
+  result.userId
+);
 
-    return res.json({
-      success: true,
-      message: "Email verified successfully.",
-    });
-  } catch (error) {
+   return res.json({
+  success: true,
+  codementorId,
+  message: "Email verified successfully. Your CodeMentor ID has been created.",
+});
+  }
+
+  catch (error) {
     console.error(
       "Signup code verification error:",
       error.message
@@ -904,6 +1004,212 @@ app.post("/api/auth/verify-code", (req, res) => {
     });
   }
 })
+/* ======================================================
+   STUDENT LOGIN â€” EMAIL + CODEMENTOR ID + PASSWORD
+   ====================================================== */
+
+app.post("/api/student/auth/login", async (req, res) => {
+  try {
+    const { email, codementorId, password } = req.body || {};
+
+    if (
+  typeof email !== "string" ||
+  typeof password !== "string" ||
+  (codementorId !== undefined && typeof codementorId !== "string") ||
+  !email.trim() ||
+  !password
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Email and password are required.",
+  });
+}
+
+   const normalizedEmail = email.trim().toLowerCase();
+const normalizedId =
+  typeof codementorId === "string"
+    ? codementorId.trim().toUpperCase()
+    : "";
+
+
+
+    // Authenticate the student's email and password.
+    const { data, error } = await authClient.auth.signInWithPassword({
+      email: normalizedEmail,
+      password,
+    });
+
+    if (error || !data.user || !data.session) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email, CodeMentor ID or password.",
+      });
+    }
+
+    if (!data.user.email_confirmed_at) {
+      return res.status(403).json({
+        success: false,
+        message: "Please verify your email before signing in.",
+      });
+    }
+
+    // Check the ID against the authenticated user's database profile.
+    const { data: profile, error: profileError } = await adminClient
+      .from("student_profiles")
+      .select("codementor_id")
+      .eq("user_id", data.user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      console.error("Student profile lookup failed:", profileError.message);
+
+      return res.status(500).json({
+        success: false,
+        message: "Sign-in could not be completed. Please try again.",
+      });
+    }
+
+    let studentCodeMentorId;
+let requiresIdSetup = false;
+
+if (!profile) {
+  // Existing student who has not received a CodeMentor ID yet.
+  // They must leave the ID field empty for this first login.
+  if (normalizedId) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid email, CodeMentor ID or password.",
+    });
+  }
+
+  studentCodeMentorId = await getOrCreateStudentCodeMentorId(
+    data.user.id
+  );
+
+  requiresIdSetup = true;
+} else {
+  // Students who already have an ID must provide the correct one.
+  if (
+    !/^CM-[A-F0-9]{12}$/.test(normalizedId) ||
+    profile.codementor_id !== normalizedId
+  ) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid email, CodeMentor ID or password.",
+    });
+  }
+
+  studentCodeMentorId = profile.codementor_id;
+}
+
+   return res.json({
+  success: true,
+  message: requiresIdSetup
+    ? "Your first CodeMentor ID has been created."
+    : "Student signed in successfully.",
+  requiresIdSetup,
+  codementorId: requiresIdSetup ? studentCodeMentorId : undefined,
+  session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        token_type: data.session.token_type,
+        expires_in: data.session.expires_in,
+        expires_at: data.session.expires_at,
+      },
+    });
+  } catch (error) {
+    console.error("Student login error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Sign-in could not be completed. Please try again.",
+    });
+  }
+});
+
+/* ======================================================
+   STUDENT FORGOT CODEMENTOR ID
+   ====================================================== */
+
+
+
+
+// VERIFY CODE AND RETRIEVE ID
+
+// STUDENT CODEMENTOR ID RECOVERY â€” PASSWORD VERIFICATION
+
+app.post("/api/student/auth/id-recovery", async (req, res) => {
+  try {
+    const { email } = req.body || {};
+
+    if (typeof email !== "string" || !email.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter your registered email address.",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailPattern.test(normalizedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address.",
+      });
+    }
+
+    // Find the existing account using its registered email.
+    const user = await findAuthUserByEmail(normalizedEmail);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "No account was found with this email address.",
+      });
+    }
+
+    // Retrieve the CodeMentor ID linked to that account.
+    const { data: profile, error: profileError } = await adminClient
+      .from("student_profiles")
+      .select("codementor_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      console.error(
+        "CodeMentor ID recovery failed:",
+        profileError.message
+      );
+
+      return res.status(500).json({
+        success: false,
+        message: "Could not retrieve your CodeMentor ID.",
+      });
+    }
+
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: "No CodeMentor ID exists for this account yet.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      codementorId: profile.codementor_id,
+      message: "Your CodeMentor ID has been recovered successfully.",
+    });
+  } catch (error) {
+    console.error("Student ID recovery error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not recover your CodeMentor ID.",
+    });
+  }
+});
 
 /* ======================================================
    STUDENT FORGOT PASSWORD
@@ -1095,9 +1401,9 @@ const EXECUTION_CACHE_MAX_SIZE = 100;
    SERVER-DEFINED LESSON TESTS
    ====================================================== */
 const LESSON_TESTS = {
-  // Python Fundamentals — 30 lessons
+  // Python Fundamentals â€” 30 lessons
   // ======================================================
-// PYTHON FUNDAMENTALS — 30 LESSONS
+// PYTHON FUNDAMENTALS â€” 30 LESSONS
 // Matches src/courseData.ts
 // ======================================================
 
@@ -1433,7 +1739,7 @@ const LESSON_TESTS = {
 
   
   // ======================================================
-  // C++ & DSA — 50 LESSONS
+  // C++ & DSA â€” 50 LESSONS
   // Matches courseData.ts
   // ======================================================
 
@@ -1692,7 +1998,7 @@ const LESSON_TESTS = {
 
   const WEB_LESSON_TESTS = {
     // =========================
-    // HTML — Lessons 1–15
+    // HTML â€” Lessons 1â€“15
     // =========================
 
     "web:web-1": {
@@ -1749,7 +2055,7 @@ const LESSON_TESTS = {
         { expected: "<strong>Important notice</strong>", type: "contains" },
         { expected: "<em>Read carefully</em>", type: "contains" },
         { expected: "<mark>Special offer</mark>", type: "contains" },
-        { expected: "<del>₹999</del>", type: "contains" },
+        { expected: "<del>â‚¹999</del>", type: "contains" },
       ],
     },
 
@@ -1858,7 +2164,7 @@ const LESSON_TESTS = {
     },
 
     // =========================
-    // CSS — Lessons 16–30
+    // CSS â€” Lessons 16â€“30
     // =========================
 
     "web:web-16": {
@@ -2002,7 +2308,7 @@ const LESSON_TESTS = {
     },
 
     // =========================
-    // JAVASCRIPT — Lessons 31–50
+    // JAVASCRIPT â€” Lessons 31â€“50
     // =========================
 
     "web:web-31": {
@@ -2274,7 +2580,7 @@ const LESSON_TESTS = {
     };
   }
   // ======================================================
-  // CODE RUNNER — Python, C++, JavaScript, HTML and CSS
+  // CODE RUNNER â€” Python, C++, JavaScript, HTML and CSS
   // ======================================================
 
   function normalizeOutput(value) {
@@ -3035,7 +3341,7 @@ if (courseId === "web" && mode === "run") {
     }
   });
   // ======================================================
-  // CERTIFICATE REQUESTS — STUDENT + ADMIN
+  // CERTIFICATE REQUESTS â€” STUDENT + ADMIN
   // ======================================================
 
   const CERTIFICATE_COURSES = {
