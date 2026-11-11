@@ -75,6 +75,7 @@ const FRONTEND_ORIGINS = new Set(
 
 app.disable("x-powered-by");
 
+
 app.use(
   cors({
     origin(origin, callback) {
@@ -85,8 +86,9 @@ app.use(
         return callback(null, true);
       }
 
-      return callback(null, false);
+      return callback(new Error("Origin not allowed by CORS."));
     },
+    credentials: true,
     methods: ["GET", "POST", "PATCH", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     maxAge: 86400,
@@ -203,6 +205,7 @@ async function getOrCreateStudentCodeMentorId(userId) {
 
   throw new Error("Could not generate a unique CodeMentor ID.");
 }
+
 // ======================================================
 // ADMIN ACCESS CONTROL
 // ======================================================
@@ -214,33 +217,158 @@ const ADMIN_EMAILS = new Set(
     .filter(Boolean)
 );
 
-async function requireAdmin(req, res, next) {
-  try {
-    const user = await getAuthenticatedUser(req);
+// ======================================================
+// ADMIN ACCESS CONTROL - SECURE COOKIE SESSION
+// ======================================================
 
-    if (!user) {
+const ADMIN_SESSION_COOKIE = "cm_admin_session";
+const ADMIN_SESSION_DURATION = 8 * 60 * 60 * 1000;
+
+function getAdminEmail() {
+  return (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+}
+
+function getAdminSessionSecret() {
+  if (!SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Admin session signing secret is unavailable.");
+  }
+
+  return crypto
+    .createHmac("sha256", SUPABASE_SERVICE_ROLE_KEY)
+    .update("codementor-admin-session")
+    .digest();
+}
+
+function createAdminSession(email) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      email,
+      expiresAt: Date.now() + ADMIN_SESSION_DURATION,
+    })
+  ).toString("base64url");
+
+  const signature = crypto
+    .createHmac("sha256", getAdminSessionSecret())
+    .update(payload)
+    .digest("base64url");
+
+  return `${payload}.${signature}`;
+}
+
+function verifyAdminSession(session) {
+  try {
+    if (typeof session !== "string") return null;
+
+    const parts = session.split(".");
+    if (parts.length !== 2) return null;
+
+    const [payload, suppliedSignature] = parts;
+
+    const expectedSignature = crypto
+      .createHmac("sha256", getAdminSessionSecret())
+      .update(payload)
+      .digest();
+
+    const actualSignature = Buffer.from(
+      suppliedSignature,
+      "base64url"
+    );
+
+    if (
+      actualSignature.length !== expectedSignature.length ||
+      !crypto.timingSafeEqual(actualSignature, expectedSignature)
+    ) {
+      return null;
+    }
+
+    const data = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8")
+    );
+
+    if (
+      data.email !== getAdminEmail() ||
+      !data.expiresAt ||
+      Date.now() >= data.expiresAt
+    ) {
+      return null;
+    }
+
+    return {
+      id: "codementor-admin",
+      email: data.email,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getAdminCookie(req) {
+  const cookieHeader = req.headers.cookie || "";
+
+  const cookie = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) =>
+      part.startsWith(`${ADMIN_SESSION_COOKIE}=`)
+    );
+
+  if (!cookie) return null;
+
+  try {
+    return decodeURIComponent(
+      cookie.slice(ADMIN_SESSION_COOKIE.length + 1)
+    );
+  } catch {
+    return null;
+  }
+}
+
+function setAdminCookie(res, session) {
+  const isProduction = process.env.NODE_ENV === "production";
+
+  const cookieParts = [
+    `${ADMIN_SESSION_COOKIE}=${encodeURIComponent(session)}`,
+    "Path=/",
+    `Max-Age=${ADMIN_SESSION_DURATION / 1000}`,
+    "HttpOnly",
+    isProduction ? "Secure" : "",
+    isProduction ? "SameSite=None" : "SameSite=Lax",
+  ].filter(Boolean);
+
+  res.setHeader("Set-Cookie", cookieParts.join("; "));
+}
+
+function clearAdminCookie(res) {
+  const isProduction = process.env.NODE_ENV === "production";
+
+  const cookieParts = [
+    `${ADMIN_SESSION_COOKIE}=`,
+    "Path=/",
+    "Max-Age=0",
+    "HttpOnly",
+    isProduction ? "Secure" : "",
+    isProduction ? "SameSite=None" : "SameSite=Lax",
+  ].filter(Boolean);
+
+  res.setHeader("Set-Cookie", cookieParts.join("; "));
+}
+
+function requireAdmin(req, res, next) {
+  try {
+    const session = getAdminCookie(req);
+    const admin = verifyAdminSession(session);
+
+    if (!admin) {
       return res.status(401).json({
         success: false,
-        message: "Please sign in again.",
+        message: "Administrator session expired. Please sign in again.",
       });
     }
 
-    const email = user.email?.trim().toLowerCase();
-
-    if (!email || !ADMIN_EMAILS.has(email)) {
-      return res.status(403).json({
-        success: false,
-        message: "Administrator access is not authorized.",
-      });
-    }
-
-    req.adminUser = user;
+    req.adminUser = admin;
     return next();
   } catch (error) {
-    console.error(
-      "Admin authentication error:",
-      error.message
-    );
+    console.error("Admin authentication error:", error.message);
 
     return res.status(500).json({
       success: false,
@@ -260,317 +388,15 @@ app.get("/api/admin/me", requireAdmin, (req, res) => {
   });
 });
 
-app.get("/api/admin/overview", requireAdmin, async (req, res) => {
-  try {
-    const { data: userData, error: userError } =
-      await adminClient.auth.admin.listUsers({
-        page: 1,
-        perPage: 100,
-      });
+// ADMIN LOGOUT
 
-    if (userError) {
-      console.error(
-        "Admin user listing error:",
-        userError.message
-      );
+app.post("/api/admin/logout", (req, res) => {
+  clearAdminCookie(res);
 
-      return res.status(502).json({
-        success: false,
-        message: "Could not load student accounts.",
-      });
-    }
-
-    const progressRecords = [];
-    const pageSize = 1000;
-    let from = 0;
-
-    while (true) {
-      const { data, error } = await adminClient
-        .from("lesson_progress")
-        .select("user_id, course_id, lesson_id")
-        .eq("completed", true)
-        .range(from, from + pageSize - 1);
-
-      if (error) {
-        console.error(
-          "Lesson progress query error:",
-          error.message
-        );
-
-        return res.status(502).json({
-          success: false,
-          message:
-            "Could not load lesson progress. Check the lesson_progress table.",
-        });
-      }
-
-      progressRecords.push(...(data || []));
-
-      if (!data || data.length < pageSize) break;
-
-      from += pageSize;
-    }
-
-    const studentCounts = new Map();
-    const courseCounts = new Map();
-
-    for (const record of progressRecords) {
-      studentCounts.set(
-        record.user_id,
-        (studentCounts.get(record.user_id) || 0) + 1
-      );
-
-      courseCounts.set(
-        record.course_id,
-        (courseCounts.get(record.course_id) || 0) + 1
-      );
-    }
-
-    const users = userData.users || [];
-
-    return res.json({
-      success: true,
-      totalStudents:
-        typeof userData.total === "number"
-          ? userData.total
-          : null,
-      studentsOnThisPage: users.length,
-      confirmedAccounts: users.filter(
-        (user) => Boolean(user.email_confirmed_at)
-      ).length,
-      totalCompletedLessons: progressRecords.length,
-      courseProgress: Array.from(
-        courseCounts,
-        ([courseId, count]) => ({
-          courseId,
-          completedLessons: count,
-        })
-      ).sort((a, b) => b.completedLessons - a.completedLessons),
-      students: users.map((user) => ({
-        id: user.id,
-        email: user.email,
-        createdAt: user.created_at,
-        emailConfirmed: Boolean(user.email_confirmed_at),
-        lastSignInAt: user.last_sign_in_at,
-        completedLessons: studentCounts.get(user.id) || 0,
-      })),
-    });
-  } catch (error) {
-    console.error("Admin overview error:", error.message);
-
-    return res.status(500).json({
-      success: false,
-      message: "Could not load the admin dashboard.",
-    });
-  }
-});
-
-// ======================================================
-// ADMIN PASSWORD RESET
-// ======================================================
-
-// REQUEST ADMIN PASSWORD RESET CODE
-app.post("/api/admin/password-reset/request", async (req, res) => {
-  try {
-    const { email } = req.body || {};
-
-    if (
-      typeof email !== "string" ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Enter a valid email address.",
-      });
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-
-    // Do not reveal whether an email belongs to an administrator.
-    const genericResponse = {
-      success: true,
-      message:
-        "If an authorized administrator account exists for that email, a recovery code will be sent.",
-    };
-
-    if (!ADMIN_EMAILS.has(normalizedEmail)) {
-      return res.json(genericResponse);
-    }
-
-    const user = await findAuthUserByEmail(normalizedEmail);
-
-    if (!user) {
-      return res.json(genericResponse);
-    }
-
-    const code = createPasswordResetCode(normalizedEmail);
-
-    try {
-      await sendVerificationCode(normalizedEmail, code);
-    } catch (emailError) {
-      console.error(
-        "Admin password reset email error:",
-        emailError.message
-      );
-
-      return res.status(502).json({
-        success: false,
-        message: "Could not send the recovery code. Please try again.",
-      });
-    }
-
-    return res.json(genericResponse);
-  } catch (error) {
-    console.error("Admin password reset request error:", error.message);
-
-    return res.status(500).json({
-      success: false,
-      message: "Could not request a password reset.",
-    });
-  }
-});
-
-
-// VERIFY ADMIN RECOVERY CODE
-app.post("/api/admin/password-reset/verify", async (req, res) => {
-  try {
-    const { email, code } = req.body || {};
-
-    if (
-      typeof email !== "string" ||
-      typeof code !== "string" ||
-      !email.trim() ||
-      !code.trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Email and recovery code are required.",
-      });
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-
-    if (!ADMIN_EMAILS.has(normalizedEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or expired recovery code.",
-      });
-    }
-
-    const user = await findAuthUserByEmail(normalizedEmail);
-
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or expired recovery code.",
-      });
-    }
-
-    const result = verifyPasswordResetCode(
-      normalizedEmail,
-      code.trim()
-    );
-
-    if (!result.success) {
-      return res.status(400).json(result);
-    }
-
-    return res.json({
-      success: true,
-      resetToken: result.resetToken,
-      message: "Recovery code verified successfully.",
-    });
-  } catch (error) {
-    console.error("Admin password reset verification error:", error.message);
-
-    return res.status(500).json({
-      success: false,
-      message: "Could not verify the recovery code.",
-    });
-  }
-});
-
-
-// COMPLETE ADMIN PASSWORD RESET
-app.post("/api/admin/password-reset/complete", async (req, res) => {
-  try {
-    const { email, resetToken, newPassword } = req.body || {};
-
-    if (
-      typeof email !== "string" ||
-      typeof resetToken !== "string" ||
-      typeof newPassword !== "string" ||
-      !email.trim() ||
-      !resetToken.trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Email, reset token, and new password are required.",
-      });
-    }
-
-    if (newPassword.length < 8 || newPassword.length > 128) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must be between 8 and 128 characters.",
-      });
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-
-    if (!ADMIN_EMAILS.has(normalizedEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or expired password reset authorization.",
-      });
-    }
-
-    const user = await findAuthUserByEmail(normalizedEmail);
-
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or expired password reset authorization.",
-      });
-    }
-
-    // Consume the one-time reset token.
-    const authorized = consumePasswordResetToken(
-      normalizedEmail,
-      resetToken.trim()
-    );
-
-    if (!authorized.success) {
-      return res.status(400).json(authorized);
-    }
-
-    const { error } = await adminClient.auth.admin.updateUserById(
-      user.id,
-      { password: newPassword }
-    );
-
-    if (error) {
-      console.error("Admin password update error:", error.message);
-
-      return res.status(500).json({
-        success: false,
-        message:
-          "Could not update the password. Please request a new recovery code.",
-      });
-    }
-
-    return res.json({
-      success: true,
-      message: "Administrator password updated successfully.",
-    });
-  } catch (error) {
-    console.error("Admin password reset completion error:", error.message);
-
-    return res.status(500).json({
-      success: false,
-      message: "Could not update the administrator password.",
-    });
-  }
+  return res.json({
+    success: true,
+    message: "Administrator logged out successfully.",
+  });
 });
 
 // ======================================================
@@ -822,17 +648,14 @@ app.post("/api/auth/resend-signup-code", async (req, res) => {
 
 
 /* ======================================================
-   ADMIN LOGIN - NO OTP
+   ADMIN LOGIN - ENV CREDENTIALS + SECURE COOKIE
    ====================================================== */
 
-app.post("/api/admin/login", async (req, res) => {
+app.post("/api/admin/login", (req, res) => {
   try {
     const { email, password } = req.body || {};
 
-    const configuredEmail = (
-      process.env.ADMIN_EMAIL || ""
-    ).trim().toLowerCase();
-
+    const configuredEmail = getAdminEmail();
     const configuredPassword = process.env.ADMIN_PASSWORD || "";
 
     if (!configuredEmail || !configuredPassword) {
@@ -858,11 +681,16 @@ app.post("/api/admin/login", async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Check the fixed administrator credentials.
+    const suppliedPassword = Buffer.from(password);
+    const expectedPassword = Buffer.from(configuredPassword);
+
+    const passwordMatches =
+      suppliedPassword.length === expectedPassword.length &&
+      crypto.timingSafeEqual(suppliedPassword, expectedPassword);
+
     if (
       normalizedEmail !== configuredEmail ||
-      password !== configuredPassword ||
-      !ADMIN_EMAILS.has(normalizedEmail)
+      !passwordMatches
     ) {
       return res.status(401).json({
         success: false,
@@ -870,40 +698,14 @@ app.post("/api/admin/login", async (req, res) => {
       });
     }
 
-    // Create a Supabase session for the existing admin middleware.
-    const { data, error } = await authClient.auth.signInWithPassword({
-      email: normalizedEmail,
-      password,
-    });
+    // Create a secure administrator cookie session.
+    const session = createAdminSession(configuredEmail);
 
-    if (error || !data.session || !data.user) {
-      console.error(
-        "Admin Supabase authentication failed:",
-        error?.message
-      );
-
-      return res.status(401).json({
-        success: false,
-        message: "Invalid administrator email or password.",
-      });
-    }
-
-    if (!data.user.email_confirmed_at) {
-      await authClient.auth.signOut();
-
-      return res.status(403).json({
-        success: false,
-        message: "The administrator email must be confirmed in Supabase.",
-      });
-    }
+    setAdminCookie(res, session);
 
     return res.json({
       success: true,
       message: "Administrator login successful.",
-      session: {
-        access_token: data.session.access_token,
-        refresh_token: data.session.refresh_token,
-      },
     });
   } catch (error) {
     console.error("Admin login error:", error.message);
